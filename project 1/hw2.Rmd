@@ -1,0 +1,276 @@
+---
+title: "تمرین سری دوم "
+author: "Mohammad Mehdi Zare"
+date: "2023-06-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+<div dir="auto">
+
+در این تمرین هدف ما کار کردن با دیتای مربوط به دیتابت است که توسط نظرسنجی BRFSS بدست امده و شامل 441455 نمونه و 330 فیچر است . اما دیتایی که ما با ان کار میکنیم دیتای تمیز شده است  که شامل 70692 نمونه و 21 فیچر است . 
+در این تمرین تصمیم گرفتم که فقط از دیتای متوازن استفاده کنم, چرا که دیتای نامتوازن در اموزش مدل باعث بایاس در مدل میشود . 
+
+در تمرین از کتابخانه های زیر استفاده شده است 
+</div>
+
+#install packages
+
+```{r, warning=FALSE,message=FALSE}
+library(ggcorrplot)
+library(data.table)
+library(ggplot2)
+library(naivebayes)
+library(class)
+library(tidyverse)
+library(caret)
+library(leaps)
+library(MASS)
+library(randomForest)
+
+library(lemon)
+knit_print.data.frame <- lemon_print
+```
+
+
+حال در ابتدا دیتا را بررسی میکنیم و با فیچر ها و ... اشنا میشویم 
+
+
+```{r,render=lemon_print}
+
+df=fread("C:/Users/Mehdi/Documents/R/workspace/diabetes_binary_5050split_health_indicators_BRFSS2015.csv")
+
+print(names(df))
+print(sapply(df,class))
+print(summary(df))
+
+```
+<div dir="auto">
+
+برای تفسیر پذیری و راحتی کار مقادیر هر فیجر را با کلمات دیگری جایگزین میکنیم.مثلا ستون  diabetes_binary را به صورت yes , no  در می اوریم.
+</div>
+```{r}
+
+
+d=copy(df)
+
+d$Diabetes_binary[d$Diabetes_binary==0 ]<-"no"
+d$Diabetes_binary[d$Diabetes_binary==1 ]<-"yes"
+d$Sex[d$Sex==0 ]<-"female"
+d$Sex[d$Sex==1 ]<-"male"
+d$HighChol[d$HighChol==0 ]<-"no"
+d$HighChol[d$HighChol==1 ]<-"yes"
+d$Smoker[d$Smoker==0 ]<-"no"
+d$Smoker[d$Smoker==1 ]<-"yes"
+```
+
+
+## Problem 1 
+<div dir="auto">
+
+پرسش اول : 
+برای پاسخ به پرسش اول  سعی میکنیم رابطه فیچر های مختلف با دیابت را ببینم . برای اینکار از نمودار های مختلفی مثل نمودار جعبه و توزیع چگالی و هیستوگرام و ... کمک میگیریم . 
+
+
+ابتدا ماتریس همبستگی را رسم میکنیم 
+
+</div>
+
+```{r}
+correlation_matrix <- cor(df)
+correlation_matrix
+ggcorrplot(correlation_matrix)
+
+#bar plot
+
+barplot(correlation_matrix[1,], col = "blue", 
+  names.arg = colnames(correlation_matrix), 
+  main = "Correlation with Diabetes_binary",
+  #xlab = "Variable Names",
+  ylab = "Correlation Coefficient",
+  las=2)
+par(xpd=TRUE)
+mtext("Variable Names", side=1, line=4, cex=1.2)
+
+```
+<div dir="auto">
+
+با توجه به ماتریس همبستگی حدس میزنیم که bmi  و HighChol و Age با دیابت در ارتباط است . پس فقط همین موارد را بررسی میکنیم. اگر این موارد تاثیری در دیابت داشته باشند, پس میتوان مدلی برای پیشبینی از دیابت از روی دیتا بدست اورد و همچنین فیچر هایی مثل fruit و  Smoker, sex  تاثیری در دیابت ندارن .
+
+</div>
+
+
+```{r}
+
+#bmi
+ggplot(d, aes(BMI, fill = Diabetes_binary))+
+  geom_boxplot(alpha = .75)
+
+ggplot(d, aes(BMI, fill = Diabetes_binary))+
+  geom_histogram(alpha = .75)
+#  facet_grid(Diabetes_binary ~ ., scales = 'free_y')
+
+# age
+ggplot(d, aes(Age, group = Diabetes_binary, color = Diabetes_binary))+
+  geom_boxplot(alpha = .75)
+
+
+# highchol
+
+ds = d[, .(n = .N), .(Diabetes_binary, HighChol)]
+ds[, n_total := sum(n), .(HighChol)]
+ds[, n_percent := n / n_total]
+
+ggplot(ds, aes(HighChol, n_percent, fill = Diabetes_binary))+
+  geom_bar(stat = 'identity', )
+
+# Sex
+
+ds = d[, .(n = .N), .(Diabetes_binary, Sex)]
+ds[, n_total := sum(n), .(Sex)]
+ds[, n_percent := n / n_total]
+
+ggplot(ds, 
+       aes(as.factor(Sex), n_percent, fill = Diabetes_binary))+
+  geom_bar(stat = 'identity', )
+
+
+# smoker
+ds = d[, .(n = .N), .(Diabetes_binary, Smoker)]
+ds[, n_total := sum(n), .(Smoker)]
+ds[, n_percent := n / n_total]
+
+ggplot(ds, 
+       aes(Smoker, n_percent, fill = Diabetes_binary))+
+  geom_bar(stat = 'identity', )
+
+#fruits
+ds = d[, .(n = .N), .(Diabetes_binary, Fruits)]
+ds[, n_total := sum(n), .(Fruits)]
+ds[, n_percent := n / n_total]
+
+ggplot(ds, 
+       aes(Fruits, n_percent, fill = Diabetes_binary))+
+  geom_bar(stat = 'identity', )
+
+```
+<div dir="auto">
+
+با توجه به نمودار های بالا به خوبی میبینم که عواملی هستند که با دیابت رابطه دارن و میتوان از روی انها دیابت را پیشبینی کرد مثلا بالابودن bmi  و سن و  کلسترول و  . البته ویژگی هایی نیز هستند که تاثیر چندانی ندارند مثل جنسیت و مصرف میوه و مصرف سیگار . اما به طور کلی  و با توجه به نمودار های بالا میتوان گفت که پرسشنامه میتواند  پیش‌بینی قابل قبولی از اینکه یک فرد دیابت دارد یا نه، ارائه ‌کند چزا که ویژگی هایی هستند که با دیابت همبسنگی دارند. .
+   </div>
+
+## Problem 2 ,3
+حالا پاسخ پرسش دوم را میدهیم : 
+```{r}
+
+sample <- sample(c(TRUE,FALSE), nrow(df), replace=TRUE, prob=c(0.7,0.3))
+  train_dataset  <- df[sample, ]
+test_dataset  <- df[!sample, ]
+
+
+fullModel = glm(Diabetes_binary ~ ., family = 'binomial', data = train_dataset) 
+nullModel = glm(Diabetes_binary ~ 1, family = 'binomial', data = train_dataset) 
+model<- stepAIC(nullModel,
+                direction = 'both',scope = list(upper = fullModel,
+                             lower = nullModel),trace = 0)
+
+summary(model)
+
+
+```
+```{r}
+train_dataset$Diabetes_binary <- as.factor(train_dataset$Diabetes_binary)    
+
+forestmodel<-randomForest(Diabetes_binary~., data=train_dataset, 
+                          ntree=100 , nodesize=2,mtry= sqrt(ncol(train_dataset)), parallel= TRUE)
+importance(forestmodel)                     
+varImpPlot(forestmodel) 
+
+pred_test <- predict(forestmodel, newdata = test_dataset, type= "class")
+randomForestCM=table(pred_test,test_dataset$Diabetes_binary);
+confusionMatrix(randomForestCM)
+```
+<div dir="auto">
+
+
+با توجه به مدل نهایی (لاجستیک )در  روش forward selection  میبینیم که فیچیر های GenHlth , HighBP, BMI,Age , HighChol,CholCheck , HvyAlcoholConsump,PhysHlth              ,HeartDiseaseorAttack 
+فیچر هایی هستند که تاثیر خوبی دارند (ضریب بالا)
+و همچنین مقدار p_value پایینی دارند .
+
+
+
+
+در مدل رندوم فارست اموزش داده شده بر روی داده اموزش نیز میبینیم که فیجر هایی مثل HighBP و Age وGenHlth و BMI و  PhysHlth  اهمیت دارند 
+  همچنین دقت مدل بر روی داده تست 73 درصد است. 
+
+
+
+
+پاسخ سوال سوم هم همراه سوال دوم دادیم . با روش stepwise از بین فیچر ها تعدادی را انتخاب کردیم و مدل نهایی را روی انها اموزش میدهیم. و میبینیم که دقت خوبی نیز دارد.
+در کد پایین مدل قسمت قبل را روی داده تست , ازمایش میکنیم و دقت ان برابر با 75 درصد است.
+   </div>
+
+
+
+
+```{r}
+
+probabilities <- model %>% predict(test_dataset, type = "response")
+predicted.classes <- ifelse(probabilities > 0.5, 1, 0)
+print(mean(predicted.classes==test_dataset$Diabetes_binary))
+
+
+```
+
+
+<div dir="auto">
+در پایین هم نمودار ROC , AUC را میبینم .
+
+</div>
+
+```{r}
+library(pROC)
+roc_score=roc(test_dataset$Diabetes_binary, predicted.classes)
+plot(roc_score ,main ="ROC curve -- Logistic Regression ")
+
+```
+## Problem 4
+پاسخ سوال چهارم : 
+
+
+متغییر های استفاده شده : 
+
+```{r}
+print(names(unlist(model[[1]])))
+```
+<div dir="auto">
+
+برای اموزش مدل , 70 درصد دیتا را استفاده کردیم و از 30 درصد دیتا برای تست استفاده میکنیم که دقت مدل برابر 
+74 دردصد است . 
+
+   </div>
+   
+
+## Problem 5
+<div dir="auto">
+برای پاسخ به سوال 5 ام میتوان گفت بله. زیرا مبیبنیم که تعدادی فیچر هستند که تاثیر زیادی دارند و مدل های اموزش داده شده بر حسب ان فیچر ها دقت قابل قبولی دارند. پس میتوان فقط با پرسیدن ان سوال ها و با استفاده از مدل اموزش داده شده (رندوم فارست یا رگرسیون لاجستیک ) به راحتی و بدون محاسبات سنگین در سمت کلاینت یک پیشینی از ابتلا به دیابت برای نمونه های تست داد. 
+  در پایین میبینم که فقط با استفاده از 5 فیچر میتوان به دقت 70 دردصد رسید
+   </div>
+
+```{r}
+forestmodel<-randomForest(Diabetes_binary~BMI+Age+GenHlth+HighBP+Stroke+HighChol, data=train_dataset, 
+                          ntree=100 , nodesize=2,mtry= sqrt(ncol(train_dataset)), parallel= TRUE)
+
+pred_test <- predict(forestmodel, newdata = test_dataset, type= "class")
+randomForestCM=table(pred_test,test_dataset$Diabetes_binary);
+confusionMatrix(randomForestCM)
+```
+
+
+
+
+
+
+

@@ -1,0 +1,294 @@
+---
+title: "hw1-regression"
+author: "Mohammad Mehdi Zare"
+date: "2023-04-11"
+output:
+  html_document: default
+  pdf_document: default
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+libraries :
+
+
+
+
+```{r, warning=FALSE,message=FALSE}
+Sys.setlocale(locale = 'persian')
+library(data.table)
+library(ggplot2)
+library(patchwork)
+library(imager)
+library(lemon)
+knit_print.data.frame <- lemon_print
+```
+
+در این خط دیتا ست را از روی فایل میخوانیم .
+
+```{r,render=lemon_print}
+d = fread('C:\\Users\\Mehdi\\Documents\\R\\workspace\\iranprovs_mortality_monthly.csv', encoding = 'UTF-8')
+head(d)
+```
+
+همانطور که مشاهده میکنیم دیتا ست شامل 6 ستون سال و ماه و استان و جنسیت و
+گروه سنی و تعداد مرگ و میر است . با توجه به صورت سوال و نوع دیتا , تصمیم
+گرفتم که به تفکیک استان و ماه مدل خطی بر روی 5 سال قبل از کرونا تا زمان
+کرونا فیت کنم و با توجه به ان مقدار فوت اضافه در سال های کرونایی را
+تخمین بزنم.
+
+توجه کنید که اگر بخواهیم تفکیک جنسیت و گروه سنی را هم دخیل کنیم, تعداد
+مدل ها خیلی زیاد و ناکارامد میشود و همچنین با توجه به اینکه دیتا به بخش
+های زیادی میشکند , تعداد دیتای ترین مدل خیلی کم میشود و احتمالا مدل های
+خوبی بدست نمیاوریم. همچنین میدانیم که جنسیت تاثیری در مرگ و میر ناشی از
+کرونا ندارد.از لحاظ گروه سنی , با توجه به اینکه ما دنیال فوت اضافه هستیم
+, فرض میکنیم که قبل از کرونا تعداد مرگ ومیر در گروه های سنی متفاوت از یک
+فرم خطی پیروی میکند . پس اگر مدل خطی را مستقل از گروه سنی بزنیم , باز
+تاثیر خیلی بدی در مدل ما نخواهد داشت.و این به خاطر این است که مرگ و میر
+ناشی از کرونا , در همه گروه ها افزایش داشته است.
+
+همچنین با توجه به اینکه ما دیتای از سال 1389 را داریم , اگر بخواهیم مدل
+را روی همه سال های قبل کرونافیت کنیم , تقریبا یک خط افقی میدهد و معیار
+های دیگری مثل جمعیت و سطح رفاه و حوادث طبیعی و .. را دخیل میکند پس با
+نگاه کلی به دیتای چند استان , تصمیم گرفتم که 5 سال قبل کرونا را برای
+اموزش مدل در نظر بگیرم. با توجه به توضیحات بالا ستون های گروه سنی و
+جنسیت را حذف میکنیم. همچنین برای راحتی کار و مقایسه و نشان دادن تاریخ ها
+, هر سال را با تقسیم بر 13 ماه هایش جمع میکنیم . با این کار ترتیب ماه ها
+حفظ میشود و دیگر نیازی به تبدیل تاریخ ها به میلادی نیست.
+
+```{r,render=lemon_print}
+d$ym_num = d$y + (d$m / 13)
+ym_num_covid = 1398 + 10/13
+ym_num_start = ym_num_covid - 5
+newDataSet = d[, .(n = sum(n)), .(y, m, ym_num, prov), ]
+newDataSet=newDataSet[ym_num > ym_num_start]
+newDataSet$excess_mortality=0
+newDataSet$normal_excess_mortality=0
+
+head(newDataSet)
+```
+
+<p dir="rtl">
+
+در کد بالا مقدار \text{ym_num_start} تاریخ 5 سال قبل از کرونا را نشان
+میدهد که باری اموزش مدل از این سال ها استفاده میکنیم و سال های قبل از ان
+را کاری نداریم. همچنین مقدار \text{ym_num_covid} زمان شروع کرونا رابه ما
+میدهد.
+
+</p>
+
+حالا به ازای همه ماه ها و استان ها در سال های مختلف , مدل خطی فیت میکنیم
+و مقدار فوت را تا قبل کرونا با یک خط مدل میکنیم. و سپس برای هر ماه و
+استان در سال های بعد کرونا طبق خط بدست امده , یک پیشبینی از تعدد مرگ و
+میر عادی میکنیم . اگر مرگ و میر ثبت شده از دو برابر سیگما مدل به عللاوه
+مرگ و میر پیشبینی شده , بیشتر بود, ینی مرگ و میر ناشی از کرونا بوده و
+تفاضل مقدار پیشبینی شده و ثبت شده را , فوت اضافه مینامیم و در دیتا ست
+ذخیره میکنیم. همچنین p_value ضرایب را نگاه میکنیم و اگر این مقدار برای
+یک مدل زیاد بود   و شیب ان خط نزدیک شیب افقی نبود ,انرا با خط افقی میانگین جایگزین میکنیم . از انجا که در
+خط های تقریبا افقی به خاطر فرض صفر این مقدار زیاد میشود, پس مقدار
+ترشهولد را بالا در نظر گرفتم.
+
+```{r, warning=FALSE, message=FALSE}
+for (i in 1:31) {
+  PROV = unique(newDataSet$prov)[i]
+  for (j in 1:12) {
+    M=j
+    dsm = newDataSet[prov == PROV & m == M,]
+    dsm2fit = dsm[ym_num < ym_num_covid]
+    
+    fit = lm(n ~ ym_num, dsm2fit)
+    p_value=summary(fit)$coefficients[,4][2]
+    
+    if (p_value>.7& summary(fit)$coefficients[,1][2]>15){
+      dsm$n_predicted = mean(dsm2fit$n)
+    }else{
+      dsm$n_predicted = predict(fit ,dsm)
+    }
+    
+    sigmaa=summary(fit)$sigma
+    dsm$excess_mortality=dsm$n-dsm$n_predicted
+      
+    dsm[dsm$n_predicted+2*sigmaa > dsm$n]$excess_mortality  =  0
+    newDataSet[prov == PROV & m == M & ym_num > ym_num_covid]$excess_mortality  =  dsm[ym_num > ym_num_covid]$excess_mortalit
+    
+    # in this lines i plot models of one province
+      if(j==10 | j==8 | j==9){
+        dsm=rbind(dsm,dsm[nrow(dsm),])
+      }
+    
+      dsm$ymin = dsm$n_predicted-2*sigmaa
+      dsm$ymax = dsm$n_predicted+2*sigmaa
+
+      if(j==1){
+        p<-ggplot(dsm,aes(x=ym_num, y=n_predicted))+
+                    geom_ribbon(aes(ymin =ymin, ymax = ymax), fill = "grey70")+
+                    geom_line(method = 'lm')+
+                    geom_point(aes(ym_num, n), size = 1)+
+                    scale_x_continuous(breaks = 1393:1401)+
+                    geom_vline(xintercept = 1398 + 10/13, linetype = 'dashed')+
+                    ggtitle(label = PROV, subtitle = paste('month: ', M))+xlab("year")+ylab("death")
+        }else{
+
+        p=p+ ggplot(dsm,aes(x=ym_num, y=n_predicted))+
+                    geom_ribbon(aes(ymin = ymin, ymax = ymax), fill = "grey70")+
+                    geom_line(method = 'lm')+
+                    geom_point(aes(ym_num, n), size = 1)+
+                    scale_x_continuous(breaks = 1393:1401)+
+                    geom_vline(xintercept = 1398 + 10/13, linetype = 'dashed')+
+                    ggtitle(label = PROV, subtitle = paste('month: ', M))+xlab("year")+ylab("death")    }
+  }
+  # ggsave(paste(PROV,".png"),width = 20, height = 20)
+}
+
+```
+```{r,out.width="100%",out.height="100%", echo=FALSE}
+knitr::include_graphics('G:/semester 8/regression/hw1/hw1-reg-98100431-v3/فارس.png')
+```
+
+
+
+
+
+حالا و از روی مدل ها به جواب سوالات تمرین میپردازیم. <h>سوال اول\<\h> در
+سوال اول گفته شده بود که نقشه حراتی کرونا را نشان دهیم :
+
+```{r}
+for (i in 1:31) {
+  PROV = unique(newDataSet$prov)[i]
+  
+newDataSet[ym_num>=ym_num_covid & prov==PROV ]$normal_excess_mortality=  newDataSet[ym_num>=ym_num_covid & prov==PROV]$excess_mortality /(sum( newDataSet[ym_num>=ym_num_covid & prov==PROV]$n)-sum( newDataSet[ym_num>=ym_num_covid & prov==PROV]$excess_mortality))
+}
+
+g<-ggplot(newDataSet[ym_num>1398.5], aes(x =  newDataSet[ym_num>1398.5]$ym_num,
+                  y = newDataSet[ym_num>1398.5]$prov,
+                  fill = normal_excess_mortality))+xlab("year")+ylab("Provience")+geom_tile()+scale_fill_gradient(high = "red", low = "gray")
+    
+```
+
+```{r , echo=FALSE}          
+ ggsave("heatmap.png",width = 15, height = 15)
+plot(g)
+```
+
+<\h>سوال دوم<\h> 
+
+تعداد فوت اضافه در کشور برابر :
+
+```{r}
+ print(round(sum(newDataSet$excess_mortality)))
+```
+
+<\h>سوال سوم<\h> 
+
+تعداد فوت اضافه در کشور به تفکیک استان ها عبارت است از
+:
+
+```{r,render=lemon_print}
+newDataSet= newDataSet[ym_num>=ym_num_covid]
+provds = newDataSet[, .(excess_mortality =round( sum(excess_mortality)), n= sum(n)), .( prov)]
+provds$normal_excess_mortality= provds$excess_mortality/((provds$n-provds$excess_mortality))
+provds[order(excess_mortality)]
+
+```
+
+<\h>سوال چهارم<\h> 
+
+
+در مورد اینکه کدام استان در کنترل بیماری موفق بوده
+بنده با امتیاز دهی به استان ها بر اساس 3 معیار 1- رتبه چند در تعداد مرگ
+و میر کرونایی دارد 2- شاهد چند موج کرونا در این استان بوده ایم . 3- نسبت
+به جمعیت خود در رتبه چندم از مرگ و میر است
+
+با توجه به این معیار ها به هر استان یک عدد نسبت میدهیم که کمینه ان
+استانی است که در مجموع بهرین عملکرد را در کنترل کرونا داشته است.
+
+
+دلیل انتخاب این معیار ها این است که در همه جز یکی تاثیر جمعیت حدف شده است . موج های کرونا اگر در استانی کمتر باشه , به معنی است که  نوانسته از ورود موجی که در کشور راه افتاده است جلوگیری کند و موج کرونای کمتری را متحمل شود . میعار دیگر رتبه مرک ومیر استان در مرگ و میر کشور است و این به جمعیت بی ربط نیست ولی میدانیم که اگر کرونا در جایی سرایت کمتری داشته باشه , مرگ ومیر کمتری دارد و  اگر استانی بتواند جلوی سرایت را بگیرد مرگ و میر کمتری را تجربه میکند . معیار سوم هم که مقایسه نرمال شده مرگ و میر کرونایی هر استان است نسان دادن عملکرد کلی هر استان در کنترل کرونا است.   
+
+```{r,render=lemon_print}
+
+ provds$percent_excess_mortality=provds$excess_mortality/sum(provds$excess_mortality)
+ provds$wave_num=0
+ for (PROV in unique(newDataSet$prov)) {
+   provData= newDataSet[prov==PROV &ym_num>ym_num_covid ]
+   provData=provData[order(ym_num),]
+   provds[prov==PROV]$wave_num=length( which(diff(sign(diff(provData$normal_excess_mortality)))==-2)+1) 
+    }
+ provds$point = provds$percent_excess_mortality/max(provds$percent_excess_mortality) + provds$normal_excess_mortality/max( provds$normal_excess_mortality)+
+  provds$wave_num/max(provds$wave_num)
+ provds$wave_num_rank=rank(-provds$wave_num)
+provds[order(point), .(prov, point,wave_num,normal_excess_mortality,percent_excess_mortality)]
+```
+حالا روش دیگری را امتحان میکنم .
+ در این روش برای هر گروه سنی در هر استان و در ماه های مختلف , فوت اضافه را پیدا میکنم . برای این کار از مدل های دیگر و بیشتری استفاده میکنم . اگر در استانی نرمال شده  مرگ ومیر کرونایی گروه 2 که جوان و میانسال است , زیاد تر باشد . به معنی است که کرونا گسترش بیشتری داشته . زیرا اگر فوت اضافه زیادی در پیر ها و بچه ها مشاهده شود نمیتوان شیوع زیاد را فهمید چون که انها مقاومت کمتری نسبت به بیماری دارند و دردصد بیشتری فوت میشوند ولی جوان ها مقاومت بیشتری دارند و درصد کمتری فوت میشوند . بنابراین من به نرمال شده مرگ و میر گروه 2 ضریب 3 دادم . و سپس این مقدار نرمال شده را برای هر استان در گروه های مختلف جمع کردم . استانی که مقدار بالا برای ان کمینه شود بهترین عملکرد را داشته است . 
+
+```{r,render=lemon_print}
+
+
+for( i in 0:20){
+  if(i<8){
+  d[as.numeric(rownames(d))%%21==i,]$age_group=1
+  }else if(i<16){
+      d[as.numeric(rownames(d))%%21==i]$age_group=2
+  }else{
+      d[as.numeric(rownames(d))%%21==i]$age_group=3
+  }
+}
+
+newDataSet1 = d[, .(n = sum(n)), .(y, m, ym_num, prov,age_group), ]
+newDataSet1=newDataSet1[ym_num > ym_num_start]
+newDataSet1$excess_mortality=0
+newDataSet1$normal_excess_mortality=0
+
+
+for (k in 1:3) {
+for (i in 1:31) {
+  PROV = unique(newDataSet1$prov)[i]
+  for (j in 1:12) {
+    M=j
+    dsm = newDataSet1[prov == PROV & m == M & age_group==k,]
+    dsm2fit = dsm[ym_num < ym_num_covid]
+    
+    fit = lm(n ~ ym_num, dsm2fit)
+    p_value=summary(fit)$coefficients[,4][2]
+    
+    if (p_value>.7& summary(fit)$coefficients[,1][2]>15){
+      dsm$n_predicted = mean(dsm2fit$n)
+    }else{
+      dsm$n_predicted = predict(fit ,dsm)
+    }
+    
+    sigmaa=summary(fit)$sigma
+    dsm$excess_mortality=dsm$n-dsm$n_predicted
+      
+    dsm[dsm$n_predicted+2*sigmaa > dsm$n]$excess_mortality  =  0
+    newDataSet1[prov == PROV & m == M & ym_num > ym_num_covid & age_group==k]$excess_mortality  =  dsm[ym_num > ym_num_covid]$excess_mortalit
+  }
+}
+}
+
+
+newDataSet2=newDataSet1[ym_num>=ym_num_start ]
+newDataSet2= newDataSet2[, .(n = sum(n), excess_mortality=sum(excess_mortality)), .( prov, age_group), ]
+newDataSet2$normal_excess_mortality=0
+for (i in 1:3) {
+  if (i==2) {
+    newDataSet2[age_group==i]$normal_excess_mortality=3*newDataSet2[age_group==i]$excess_mortality / newDataSet2[age_group==i]$n
+  }else{
+    newDataSet2[age_group==i]$normal_excess_mortality=  newDataSet2[age_group==i]$excess_mortality / newDataSet2[age_group==i]$n
+  }
+}
+
+newDataSet3= newDataSet2[, .(n = sum(n), excess_mortality=sum(excess_mortality), normal_excess_mortality=sum(normal_excess_mortality)), .( prov), ]
+newDataSet3[order(normal_excess_mortality), .(prov,normal_excess_mortality)]
+
+```
+
+
+با توجه به روش اول میبینیم که استان سیستان و بلوچستان طبق امتیازی که
+به ان نسبت دادیم, بهترین عملکرد را داشته و تفاوت بین استان های بعدی
+چندان زیاد نیست و خراسان شمال و لرستان در رتبه دوم و سوم بهتین عملکرد ها هستند.
+
+
+در روش دوم مشابه روش اول استان سیستان و بلوچستان در رتبه اول و خراسان شمالی در رتبه دوم است و لرستان در رتبه سوم قرار میگیرد. 
